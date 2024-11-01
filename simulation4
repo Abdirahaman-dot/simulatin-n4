@@ -1,0 +1,101 @@
+import simpy
+import random
+import numpy as np
+import matplotlib.pyplot as plt
+
+# Constants
+RANDOM_SEED = 42
+SIM_TIME = 480  # Simulation time in minutes (8 hours)
+NUM_WORKERS = 3  # Number of workers
+NUM_WORKSTATIONS = 2  # Number of workstations
+JOB_ARRIVAL_RATE = 10  # Average time (in minutes) between job arrivals
+
+# Job Types and their durations
+JOB_TYPES = {
+    'basic': (20, 40),  # Duration range in minutes
+    'complex': (50, 90),
+    'urgent': (10, 30)
+}
+
+# Tracking metrics
+job_completion_times = []
+resource_usage = {'workers': [], 'workstations': []}
+
+class Workshop:
+    def __init__(self, env):
+        self.env = env
+        self.worker = simpy.Resource(env, NUM_WORKERS)
+        self.workstation = simpy.Resource(env, NUM_WORKSTATIONS)
+
+    def process_job(self, job_type):
+        # Get a random duration based on job type
+        duration = random.randint(*JOB_TYPES[job_type])
+        yield self.env.timeout(duration)
+
+def job(env, name, job_type, workshop):
+    """Represents a job in the workshop"""
+    arrival_time = env.now
+    print(f"{name} of type '{job_type}' arrived at {arrival_time:.2f}")
+
+    # Request worker and workstation
+    with workshop.worker.request() as worker_req, workshop.workstation.request() as ws_req:
+        start_wait = env.now
+        yield worker_req & ws_req  # Wait for both resources to become available
+        wait_time = env.now - start_wait
+        print(f"{name} started at {env.now:.2f} after waiting for {wait_time:.2f} minutes")
+
+        # Record resource usage (for utilization stats)
+        resource_usage['workers'].append(env.now - arrival_time)
+        resource_usage['workstations'].append(env.now - arrival_time)
+
+        # Process the job
+        yield env.process(workshop.process_job(job_type))
+        completion_time = env.now - arrival_time
+        job_completion_times.append(completion_time)
+        print(f"{name} completed at {env.now:.2f} (Total time: {completion_time:.2f} minutes)")
+
+def job_generator(env, workshop):
+    """Generates jobs for the workshop"""
+    job_count = 0
+    while True:
+        yield env.timeout(random.expovariate(1 / JOB_ARRIVAL_RATE))
+        job_count += 1
+        job_type = random.choices(list(JOB_TYPES.keys()), weights=[0.5, 0.3, 0.2])[0]
+        env.process(job(env, f"Job {job_count}", job_type, workshop))
+
+# Set up and run the simulation
+print("Starting simulation...")
+random.seed(RANDOM_SEED)
+env = simpy.Environment()
+workshop = Workshop(env)
+env.process(job_generator(env, workshop))
+env.run(until=SIM_TIME)
+
+# Visualization
+# Job completion time histogram
+plt.figure(figsize=(12, 5))
+plt.subplot(1, 2, 1)
+plt.hist(job_completion_times, bins=10, color='skyblue', edgecolor='black')
+plt.xlabel("Job Completion Time (minutes)")
+plt.ylabel("Number of Jobs")
+plt.title("Histogram of Job Completion Times")
+
+# Resource utilization histogram
+worker_usage = [usage for usage in resource_usage['workers']]
+workstation_usage = [usage for usage in resource_usage['workstations']]
+
+plt.subplot(1, 2, 2)
+plt.hist([worker_usage, workstation_usage], bins=10, color=['salmon', 'lightgreen'], label=['Workers', 'Workstations'])
+plt.xlabel("Resource Usage Time (minutes)")
+plt.ylabel("Frequency")
+plt.legend()
+plt.title("Histogram of Resource Utilization Times")
+
+plt.tight_layout()
+plt.show()
+
+# Summary statistics
+print("\nSummary Statistics:")
+print(f"Average job completion time: {np.mean(job_completion_times):.2f} minutes")
+print(f"Average worker utilization time: {np.mean(worker_usage):.2f} minutes")
+print(f"Average workstation utilization time: {np.mean(workstation_usage):.2f} minutes")
